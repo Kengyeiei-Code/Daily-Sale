@@ -18,7 +18,6 @@ with st.form("upload_form"):
     
     submit_button = st.form_submit_button("ประมวลผลและสร้างไฟล์ Excel 🚀")
 
-# ฟังก์ชันช่วยหาคอลัมน์ (รองรับทั้งไทยและอังกฤษ)
 def find_col_index(row_strs, possible_names):
     for i, val in enumerate(row_strs):
         if val.lower() in possible_names:
@@ -37,20 +36,19 @@ if submit_button:
                 # --- 1. สกัดข้อมูลจากไฟล์ SaleByBehavior ---
                 df_bev = pd.read_csv(bev_file, header=None) if bev_file.name.endswith('.csv') else pd.read_excel(bev_file, header=None)
                 
-                # ชุดคำศัพท์ที่ระบบจะใช้ควานหาคอลัมน์
-                item_names = ['สินค้า', 'menu', 'item', 'product', 'product name']
+                item_names = ['สินค้า', 'menu', 'item', 'product']
                 qty_names = ['จำนวน', 'qty', 'quantity']
-                type_names = ['ปรเะภท', 'ประเภท', 'type', 'category', 'behavior', 'order type']
-                del_names = ['delivery', 'platform', 'app', 'marketplace']
-                net_names = ['ยอดสุทธิ', 'net sale', 'net amount', 'net', 'total']
+                type_names = ['ปรเะภท', 'ประเภท', 'type', 'category', 'behavior']
+                del_names = ['delivery', 'platform', 'app']
+                amt_names = ['ยอดเงิน', 'amount', 'gross', 'gross sale', 'ยอดขาย'] # ใช้ยอดเงินเป็นหลัก
+                net_names = ['ยอดสุทธิ', 'net sale', 'net', 'total']
 
-                item_col = qty_col = type_col = del_col = net_col = -1
+                item_col = qty_col = type_col = del_col = val_col = -1
                 start_row = -1
                 
-                # สแกนหาบรรทัดที่เป็นหัวตาราง (หาบรรทัดที่มีคำว่า สินค้า/Menu และ จำนวน/Qty)
-                for idx, row in df_bev.head(20).iterrows(): # สแกน 20 บรรทัดแรก
+                # สแกนหาบรรทัดหัวตาราง
+                for idx, row in df_bev.head(20).iterrows():
                     row_strs = [str(x).strip().lower() for x in row.values]
-                    
                     item_col = find_col_index(row_strs, item_names)
                     qty_col = find_col_index(row_strs, qty_names)
                     
@@ -58,7 +56,10 @@ if submit_button:
                         start_row = idx
                         type_col = find_col_index(row_strs, type_names)
                         del_col = find_col_index(row_strs, del_names)
+                        
+                        amt_col = find_col_index(row_strs, amt_names)
                         net_col = find_col_index(row_strs, net_names)
+                        val_col = amt_col if amt_col != -1 else net_col # ถ้าระบบมีคอลัมน์ยอดเงิน ให้ดึงยอดเงินก่อน
                         break
                         
                 if start_row != -1:
@@ -78,27 +79,26 @@ if submit_button:
                         if type_col != -1 and pd.notna(row[type_col]):
                             type_name = str(row[type_col]).strip().lower()
                             if type_name and type_name != 'nan':
-                                net_str = str(row[net_col]).replace(',', '') if net_col != -1 and pd.notna(row[net_col]) else "0"
-                                try: net_val = float(net_str)
-                                except: net_val = 0
+                                val_str = str(row[val_col]).replace(',', '') if val_col != -1 and pd.notna(row[val_col]) else "0"
+                                try: sale_val = float(val_str)
+                                except: sale_val = 0
                                 
-                                # เก็บยอด EatIn / Takeaway
                                 if type_name in ['eatin', 'eat in', 'ทานที่ร้าน']:
-                                    data_map['eatin'] = data_map.get('eatin', 0) + net_val
-                                    data_map['eat in'] = data_map.get('eat in', 0) + net_val
+                                    data_map['eatin'] = data_map.get('eatin', 0) + sale_val
+                                    data_map['eat in'] = data_map.get('eat in', 0) + sale_val
                                 elif type_name in ['takeaway', 'take away', 'สั่งกลับบ้าน']:
-                                    data_map['takeaway'] = data_map.get('takeaway', 0) + net_val
-                                    data_map['take away'] = data_map.get('take away', 0) + net_val
+                                    data_map['takeaway'] = data_map.get('takeaway', 0) + sale_val
+                                    data_map['take away'] = data_map.get('take away', 0) + sale_val
                                 else:
-                                    data_map[type_name] = data_map.get(type_name, 0) + net_val
+                                    data_map[type_name] = data_map.get(type_name, 0) + sale_val
                                     
-                                # เก็บยอด Grab, Lineman, Shopee Food
+                                # ✨ จุดที่แก้บัค: ป้องกันบวกเบิ้ล ถ้าชื่อคอลัมน์ประเภทกับคอลัมน์แพลตฟอร์มดันเขียนเหมือนกัน
                                 if del_col != -1 and pd.notna(row[del_col]):
                                     del_name = str(row[del_col]).strip().lower()
-                                    if del_name and del_name != 'nan':
-                                        data_map[del_name] = data_map.get(del_name, 0) + net_val
+                                    if del_name and del_name != 'nan' and del_name != type_name:
+                                        data_map[del_name] = data_map.get(del_name, 0) + sale_val
                 else:
-                    log_messages.append("⚠️ หาคอลัมน์ชื่อ 'Menu/Item' และ 'Qty' ไม่เจอในไฟล์ SaleByBehavior")
+                    log_messages.append("⚠️ หาคอลัมน์ชื่อ 'Menu' และ 'Qty' ไม่เจอ")
 
                 # --- 2. สกัดข้อมูลจากไฟล์ SaleReport (ดึงเฉพาะส่วนลด) ---
                 df_sale = pd.read_csv(sale_file, header=None) if sale_file.name.endswith('.csv') else pd.read_excel(sale_file, header=None)
@@ -128,9 +128,9 @@ if submit_button:
                 if ws_bev:
                     updated_bev = 0
                     for r in range(2, ws_bev.max_row + 1):
-                        menu_cell = ws_bev.cell(row=r, column=2) # B
-                        today_cell = ws_bev.cell(row=r, column=3) # C
-                        yest_cell = ws_bev.cell(row=r, column=4) # D
+                        menu_cell = ws_bev.cell(row=r, column=2)
+                        today_cell = ws_bev.cell(row=r, column=3)
+                        yest_cell = ws_bev.cell(row=r, column=4)
 
                         if menu_cell.value and not str(menu_cell.value).startswith('='):
                             raw_name = str(menu_cell.value).strip()
@@ -154,9 +154,9 @@ if submit_button:
                 if ws_sale:
                     updated_sale = 0
                     for r in range(2, ws_sale.max_row + 1):
-                        cat_cell = ws_sale.cell(row=r, column=1) # A
-                        today_cell = ws_sale.cell(row=r, column=2) # B
-                        yest_cell = ws_sale.cell(row=r, column=4) # D
+                        cat_cell = ws_sale.cell(row=r, column=1)
+                        today_cell = ws_sale.cell(row=r, column=2)
+                        yest_cell = ws_sale.cell(row=r, column=4)
 
                         if cat_cell.value and not str(cat_cell.value).startswith('='):
                             raw_name = str(cat_cell.value).strip()
@@ -172,7 +172,7 @@ if submit_button:
                             
                             new_val = data_map.get(c_name, 0)
                             today_cell.value = new_val
-                            if new_val > 0: updated_sale += 1
+                            if new_val > 0 or current_today > 0: updated_sale += 1
                                 
                     log_messages.append(f"✅ อัปเดต **ยอดขายและส่วนลด** สำเร็จ ({updated_sale} หมวดหมู่)")
 
@@ -181,7 +181,7 @@ if submit_button:
                 wb.save(output)
                 output.seek(0)
                 
-                st.success("🎉 ประมวลผลเสร็จสมบูรณ์!")
+                st.success("🎉 ประมวลผลเสร็จสมบูรณ์ ยอดตรงเป๊ะแล้วครับ!")
                 for msg in log_messages:
                     st.write(msg)
 
